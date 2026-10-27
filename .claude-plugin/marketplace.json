@@ -1,0 +1,9 @@
+{
+  "name": "evaboot-labs-n8n-linkedin-crm-sync",
+  "owner": { "name": "Evaboot", "url": "https://evaboot.com" },
+  "metadata": { "description": "A weekly LinkedIn to HubSpot sync with n8n: new Sales Navigator leads in, duplicates out, job changes caught." },
+  "plugins": [
+    { "name": "n8n-linkedin-crm-sync", "source": "./",
+      "description": "Sync Sales Navigator leads into HubSpot without duplicates: match by LinkedIn id and email, create new people with an AI first line, update job changes." }
+  ]
+}

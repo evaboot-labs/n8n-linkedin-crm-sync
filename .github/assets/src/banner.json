@@ -1,0 +1,7 @@
+{"layout": "flow", "eyebrow": "evaboot-labs · n8n-linkedin-crm-sync", "headline": "LinkedIn leads, no duplicates.",
+ "subline": "A weekly Sales Navigator search into HubSpot: new people created, job changes updated.",
+ "nodes": [{"label": "01 · Search", "title": "Evaboot", "caption": "Weekly Sales Navigator run"},
+           {"label": "02 · Match", "title": "n8n", "caption": "LinkedIn id, then email"},
+           {"label": "03 · Note", "title": "Claude", "caption": "Fit and first line"},
+           {"label": "04 · Result", "title": "HubSpot", "caption": "Created or updated"}],
+ "spec": "only new people each week · known contacts never touched"}

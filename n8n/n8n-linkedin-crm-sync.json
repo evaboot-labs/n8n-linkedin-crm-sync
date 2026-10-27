@@ -1,0 +1,464 @@
+{
+  "name": "LinkedIn to HubSpot sync (Evaboot + Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "evaboot-linkedin-sync",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "1192d4ca-b576-48f1-84e7-ab48bcf20a95",
+      "name": "New people from Evaboot",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ad5c8f3c-7c02-4134-aeba-9ece104a9047"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "253a7f9c-8eeb-4dd6-adae-740a7fc79409",
+              "name": "buyers",
+              "type": "string",
+              "value": "good: people who lead or run sales, business development or growth (Heads, Directors, VPs, CROs) at B2B software companies of 51 to 5,000 employees. maybe: customer success or account management leaders. no: anyone else."
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3b951d49-b96b-4620-b280-03f2d39a1907",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// One item per person in the Evaboot run, keyed by the LinkedIn id that never changes.\nconst seen = new Set();\nconst words = (t, n) => String(t || '').split(/\\s+/).join(' ').trim().slice(0, n);\nreturn ($json.body.prospects || []).filter(p => {\n  const id = p['Linkedin URL Unique ID'];\n  if (!id || seen.has(id)) return false;\n  seen.add(id); return true;\n}).map(p => ({ json: {\n  id: p['Linkedin URL Unique ID'], first_name: p['First Name'] || '', last_name: p['Last Name'] || '',\n  title: words(p['Current Job'], 120), company: p['Company Name'] || '', domain: p['Company Domain'] || '',\n  headline: words(p['Profile Headline'], 160), company_description: words(p['Company Description'], 300),\n  email: p['Email'] || '', email_status: String(p['Email Status'] || '').toLowerCase(),\n} }));\n"
+      },
+      "id": "c7e0b1c0-97e8-4d73-b2bc-155f6c4a94d2",
+      "name": "One item per person",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ limit: 100, properties: [\"firstname\", \"lastname\", \"email\", \"jobtitle\", \"company\", \"hs_linkedin_url\", \"linkedin_change\"], filterGroups: [{ filters: [{ propertyName: 'hs_linkedin_url', operator: 'IN', values: $input.all().map(i => i.json.id).slice(0, 100) }] }] }) }}",
+        "options": {}
+      },
+      "id": "56fd8180-858c-4622-b2b7-b62f4ae0c38d",
+      "name": "Find by LinkedIn id",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        0
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "",
+          "name": "HubSpot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ limit: 100, properties: [\"firstname\", \"lastname\", \"email\", \"jobtitle\", \"company\", \"hs_linkedin_url\", \"linkedin_change\"], filterGroups: [{ filters: [{ propertyName: 'email', operator: 'IN', values: $('One item per person').all().map(i => i.json.email.toLowerCase()).filter(Boolean).slice(0, 100).concat(['-']) }] }] }) }}",
+        "options": {}
+      },
+      "id": "c19a6fa5-e569-4efb-b333-c28a29b387c4",
+      "name": "Find by email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        0
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "",
+          "name": "HubSpot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Same as sync.py match: LinkedIn id first, then email. Changed = same person, another title or company.\nconst byLi = {}, byMail = {};\nfor (const r of ($('Find by LinkedIn id').first().json.results || [])) byLi[String(r.properties.hs_linkedin_url || '').toLowerCase()] = r;\nfor (const r of ($('Find by email').first().json.results || [])) byMail[String(r.properties.email || '').toLowerCase()] = r;\nconst norm = s => String(s || '').trim().toLowerCase().replace(/\\s+/g, ' ');\nreturn $('One item per person').all().map(({ json: l }) => {\n  const crm = byLi[l.id.toLowerCase()] || (l.email ? byMail[l.email.toLowerCase()] : null);\n  if (!crm) return { json: { ...l, status: 'new' } };\n  const p = crm.properties;\n  const moved = (p.company || p.jobtitle) && (norm(p.company) !== norm(l.company) || norm(p.jobtitle) !== norm(l.title));\n  return { json: { ...l, status: moved ? 'changed' : 'known', crm_id: crm.id, was: [p.jobtitle, p.company].filter(Boolean).join(' at ') } };\n});\n"
+      },
+      "id": "f3d1e882-ac38-4271-9440-b5203217443d",
+      "name": "New, changed or known",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "7fc59a6c-cd3d-4914-9445-c9c11ff9ce0d",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "new",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0c111648-f886-4f20-8e84-4cdbb1858ca0",
+      "name": "Is new",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1220,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "1620696c-eebf-4376-85cf-2bd44180def2",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "changed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f964df5b-27f0-4543-b113-4e4139f102db",
+      "name": "Has changed",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1220,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "hasOutputParser": true,
+        "text": "={{ JSON.stringify($input.all().map(i => ({ id: i.json.id, first_name: i.json.first_name, title: i.json.title, company: i.json.company, headline: i.json.headline, company_description: i.json.company_description }))) }}",
+        "options": {
+          "systemMessage": "=You add new LinkedIn leads to a CRM. For each person in the JSON (title, company, headline, company description), decide if they fit the buyers below and write one first line. Use only these facts; never invent anything.\n\nReturn {people: [{id, fit, first_line}]}:\n- fit: good, maybe or no, from the buyers below. A no is not added to the CRM.\n- first_line: one sentence under 30 words for the opening of a first email or a connection request, built only from their title, headline and company description.\n- Never guess anyone's gender: no he, she, him or her. Use the first name, \"they\" or the role.\n\nBuyers:\n{{ $('Settings').first().json.buyers }}",
+          "maxIterations": 3
+        }
+      },
+      "id": "d04bb7a9-8c46-4563-8ab3-13d1066a13a6",
+      "name": "Fit and first line",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1460,
+        -140
+      ],
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-5-5",
+          "cachedResultName": "claude-sonnet-5-5"
+        },
+        "options": {
+          "maxTokensToSample": 4000
+        }
+      },
+      "id": "87872f20-87fd-469b-8512-9939e7a81d03",
+      "name": "Claude",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1420,
+        80
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "",
+          "name": "Anthropic"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"required\": [\n    \"people\"\n  ],\n  \"properties\": {\n    \"people\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"id\",\n          \"fit\",\n          \"first_line\"\n        ],\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\"\n          },\n          \"fit\": {\n            \"type\": \"string\"\n          },\n          \"first_line\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    }\n  }\n}"
+      },
+      "id": "29fdd6f6-4a68-4ec7-b460-38219967a9e7",
+      "name": "Notes",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1580,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Same as sync.py plan: create the people who fit, with an email only when Evaboot rates it safe.\nconst notes = Object.fromEntries(($json.output.people || []).map(n => [n.id, n]));\nconst today = new Date().toISOString().slice(0, 10);\nconst out = [];\nfor (const { json: l } of $('Is new').all()) {\n  const n = notes[l.id];\n  if (!n || !['good', 'maybe'].includes(n.fit) || !n.first_line) continue;\n  const properties = { firstname: l.first_name, lastname: l.last_name, jobtitle: l.title, company: l.company,\n    hs_linkedin_url: l.id, ai_first_line: String(n.first_line).split(/\\s+/).slice(0, 30).join(' '),\n    linkedin_change: `Added from Sales Navigator on ${today}` };\n  if (l.domain) properties.website = l.domain;\n  if (l.email && l.email_status === 'safe') properties.email = l.email;\n  out.push({ json: { properties } });\n}\nreturn out;\n"
+      },
+      "id": "cf52fe41-fb29-43e2-87d5-b93271503700",
+      "name": "Build the new contacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/batch/create",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ inputs: $input.all().map(i => ({ properties: i.json.properties })) }) }}",
+        "options": {}
+      },
+      "id": "d81edebc-4ca4-4b4a-a024-99568b23e8da",
+      "name": "Create in HubSpot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2020,
+        -140
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "",
+          "name": "HubSpot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.crm_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotAppToken",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { jobtitle: $json.title, company: $json.company, linkedin_change: new Date().toISOString().slice(0, 10) + ': was ' + ($json.was || 'unknown') + ', now ' + $json.title + ' at ' + $json.company } }) }}",
+        "options": {}
+      },
+      "id": "735a7f13-1344-4363-b1a7-4e77854c3f82",
+      "name": "Update title and company",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        200
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "",
+          "name": "HubSpot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New people from Evaboot": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "One item per person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per person": {
+      "main": [
+        [
+          {
+            "node": "Find by LinkedIn id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find by LinkedIn id": {
+      "main": [
+        [
+          {
+            "node": "Find by email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find by email": {
+      "main": [
+        [
+          {
+            "node": "New, changed or known",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New, changed or known": {
+      "main": [
+        [
+          {
+            "node": "Is new",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Has changed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is new": {
+      "main": [
+        [
+          {
+            "node": "Fit and first line",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fit and first line": {
+      "main": [
+        [
+          {
+            "node": "Build the new contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build the new contacts": {
+      "main": [
+        [
+          {
+            "node": "Create in HubSpot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has changed": {
+      "main": [
+        [
+          {
+            "node": "Update title and company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Fit and first line",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notes": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Fit and first line",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
