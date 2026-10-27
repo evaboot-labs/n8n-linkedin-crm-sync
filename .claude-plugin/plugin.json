@@ -1,0 +1,13 @@
+{
+  "name": "n8n-linkedin-crm-sync",
+  "version": "1.0.0",
+  "description": "Sync Sales Navigator leads into HubSpot without duplicates: match by LinkedIn id and email, create new people with an AI first line, update job changes.",
+  "author": { "name": "Evaboot", "url": "https://evaboot.com" },
+  "homepage": "https://evaboot.com/blog/n8n-linkedin-automation",
+  "repository": "https://github.com/evaboot-labs/n8n-linkedin-crm-sync",
+  "license": "MIT",
+  "privacyPolicyUrl": "https://evaboot.com/privacy-policy",
+  "keywords": ["n8n", "linkedin", "sales-navigator", "hubspot", "crm-sync", "evaboot"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
